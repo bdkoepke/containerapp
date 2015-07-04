@@ -5,4 +5,5 @@ gradle/
 gradlew
 gradlew.bat
 containerapp.iml
-containerapp-release.apk
+containerapp-debug.apk
+local.properties

@@ -50,18 +50,16 @@ import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.Arrays;
 import java.util.ListIterator;
 
-import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
-import org.apache.http.conn.ssl.BrowserCompatHostnameVerifier;
-
+import android.annotation.SuppressLint;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.StrictMode;
@@ -83,6 +81,7 @@ import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.WebChromeClient;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
@@ -106,14 +105,15 @@ public class ContainerMain extends Activity {
 	static String toRule=null;
 	static String TAG=""; 
 	ArrayList<String> whiteList = new ArrayList<String>();
+	private boolean allowExternals = false;
 
 	private final static int FILECHOOSER_RESULTCODE=1;
-	private ValueCallback<Uri> mUploadMessage;  
+	private ValueCallback<Uri> mUploadMessage;
 
 	@Override  
 	protected void onActivityResult(int requestCode, int resultCode,  
 	                                    Intent intent) {
-		if(requestCode==FILECHOOSER_RESULTCODE)  
+		if(requestCode==FILECHOOSER_RESULTCODE)
 		{  
 			if (null == mUploadMessage) return;  
 	        Uri result = intent == null || resultCode != RESULT_OK ? null : intent.getData();  
@@ -145,10 +145,7 @@ public class ContainerMain extends Activity {
 			String stringValue=convertStreamToString(fis);
 			String stringArray[]=stringValue.split("\n");
 			fixedURL = stringArray[0];
-			if(stringArray.length>1 && stringArray[1].equalsIgnoreCase("false"))
-				matchOrigin=false;
-			else
-				matchOrigin=true;
+			matchOrigin = !(stringArray.length > 1 && stringArray[1].equalsIgnoreCase("false"));
 			//For ForceHTTPS, check if fromRule and toRule were packaged with this app
 			if(stringArray.length>2){
 				fromRule = stringArray[2];
@@ -189,7 +186,7 @@ public class ContainerMain extends Activity {
 				if(!rootcertfile.exists())
 				{
 					Log.d(TAG,"Acquiring Root CA Cert for the first time for "+urlfromfile.toString());	
-					HttpsURLConnection con=null;
+					HttpsURLConnection con;
 					try {
 						InitialX509TrustManager tm = new InitialX509TrustManager();
 						TrustManager[] tmarray = new TrustManager[1];
@@ -200,7 +197,7 @@ public class ContainerMain extends Activity {
 						con.setSSLSocketFactory(sslcontext.getSocketFactory());
 						InputStream in = con.getInputStream();
 						if(in!=null) in.close();
-						if(con!=null) con.disconnect();
+						con.disconnect();
 					}
 					catch (Exception e) {
 						// TODO Auto-generated catch block
@@ -220,9 +217,9 @@ public class ContainerMain extends Activity {
 				        //System.out.println(maincert.toString());
 				      }
 				      finally{
-				        if(input!=null) input.close();
-				        if(buffer!=null) buffer.close();
-				        if(file!=null) file.close();
+				        input.close();
+				        buffer.close();
+				        file.close();
 				      }
 				    }
 				    catch(ClassNotFoundException e){
@@ -292,6 +289,7 @@ public class ContainerMain extends Activity {
 
 		//Configuring App cache
 		webSettings.setAppCacheEnabled(true);
+		@SuppressLint("SdCardPath")
 		webSettings.setAppCachePath("/data/data/" + getPackageName() + "/cache/");
 		webSettings.setAppCacheMaxSize(1024*1024*8);
 	
@@ -319,7 +317,13 @@ public class ContainerMain extends Activity {
 		getMenuInflater().inflate(R.menu.activity_container_main, menu);
 		return true;
 	}
-	
+
+	@Override
+	public boolean onPrepareOptionsMenu(Menu menu) {
+		menu.findItem(R.id.allowExternals).setChecked(this.allowExternals);
+		return super.onPrepareOptionsMenu(menu);
+	}
+
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 	    // Handle item selection
@@ -332,6 +336,7 @@ public class ContainerMain extends Activity {
 	    }
 	}
 	
+	@SuppressWarnings("NullableProblems")
 	@Override
 	public boolean onKeyDown(int keyCode, KeyEvent event) {
 	    if ((keyCode == KeyEvent.KEYCODE_BACK) && mywebview.canGoBack()) {
@@ -355,9 +360,19 @@ public class ContainerMain extends Activity {
 	    java.util.Scanner s = new java.util.Scanner(is).useDelimiter("\\A");
 	    return s.hasNext() ? s.next() : "";
 	}
-	
 
-	//MyWebViewClient: Controls navigation. 
+	public void onCheckboxClicked(View item) {
+		boolean checked = ((CheckBox) item).isChecked();
+		switch (item.getId()) {
+			case R.id.allowExternals:
+				this.allowExternals = checked;
+				break;
+			default:
+				break;
+		}
+	}
+
+	//MyWebViewClient: Controls navigation.
 	private class MyWebViewClient extends WebViewClient {
 	    @Override
 	    public boolean shouldOverrideUrlLoading(WebView view, String url) {	
@@ -365,8 +380,8 @@ public class ContainerMain extends Activity {
 	    	//continue in the webview or not	
 	    	//return false to load in WebView; if true, send an intent to the Web browser
 	    
-	    	URL origURL=null;
-	    	URL currentURL= null;
+		URL origURL;
+		URL currentURL;
 	    	try {
 			    origURL = new URL(fixedURL);
 				currentURL = new URL(url);
@@ -376,11 +391,8 @@ public class ContainerMain extends Activity {
 				e.printStackTrace();
 				return false;
 			}
-	    	
-	    	if(origURL==null || currentURL==null)
-	    		return false;
-	    	
-	    	//HTTPS -> HTTP, check if rule exists, if it does then replace with https  
+
+		//HTTPS -> HTTP, check if rule exists, if it does then replace with https
 	    	if(origURL.getProtocol().equals("https")&&(currentURL.getProtocol().equals("http"))&&rulePresent){
 	    		try {
 					currentURL=new URL(currentURL.toString().replaceAll(fromRule,toRule));
@@ -390,7 +402,13 @@ public class ContainerMain extends Activity {
 					e.printStackTrace();
 				}
 	    	}
-	    	
+
+		CheckBox allowExternals = (CheckBox)findViewById(R.id.allowExternals);
+		if (allowExternals != null && allowExternals.isChecked()) {
+			showToast("AllowExternals enabled, allowing: "+url);
+			return true;
+		}
+
 	    	//Comparing Current URL with WhiteList
 	    	//If it exists in the white list, let it load
 	    	ListIterator<String> whiteListIterator = whiteList.listIterator();
@@ -407,7 +425,7 @@ public class ContainerMain extends Activity {
 
     		//Check entire host first; to prevent additional overhead of obtaining the origin domain and matching it.	
     		if (origURL.getHost().equals(currentURL.getHost())) {
-    			if(!checkHTTPSConnection(currentURL, view))
+			if(!checkHTTPSConnection(currentURL))
     				return false;
     		}
     		try{
@@ -417,9 +435,9 @@ public class ContainerMain extends Activity {
 			    	//Compare the second level domain ("bestbuy.com" from www-ssl.bestbuy.com)
 			    	String arrayOrig[] = (origURL.getHost()+"").split("\\.");
 			    	String arrayCurrent[] = (currentURL.getHost()+"").split("\\.");
-			    	Log.d(TAG,arrayOrig+ " | "+arrayCurrent);
+			    	Log.d(TAG, Arrays.toString(arrayOrig) + " | "+ Arrays.toString(arrayCurrent));
 			    	int lenOrig = arrayOrig.length, lenCurr = arrayCurrent.length;
-			    	int origIndex=0, currIndex=0;
+			    	int origIndex, currIndex;
 			    	if(arrayOrig[lenOrig-1].length()<=2 && arrayOrig[lenOrig-2].length()<=2)
 			    		origIndex=3;//i.e. third from the end
 			    	else origIndex=2;//i.e. 2nd from the end
@@ -442,7 +460,7 @@ public class ContainerMain extends Activity {
 		    			Log.d(TAG,"Matched "+origDomainToMatch);
 		    			//checkHTTPSConnection returns true when certificate DOES NOT match, 
 		    			//we return false to indicate loading in the webview app.
-		    			if(!checkHTTPSConnection(currentURL, view))
+		    			if(!checkHTTPSConnection(currentURL))
 		    				return false;
 		    		}
 		    	}
@@ -459,11 +477,6 @@ public class ContainerMain extends Activity {
 	        startActivity(intent);	        
 	        return true;
 	    }
-	    public void openFileChooser( ValueCallback<Uri> uploadMsg, String acceptType ) 
-	    {  
-	        this.openFileChooser(uploadMsg, acceptType);
-	    }
-	    
 	}
 	//Display a Toast
 	private void showToast(String toastText){
@@ -474,7 +487,7 @@ public class ContainerMain extends Activity {
 	}
 	
 	//Check if a valid HTTPS connection can be formed
-	boolean checkHTTPSConnection(URL currentURL, WebView view)
+	boolean checkHTTPSConnection(URL currentURL)
 	{//returns false on valid certificate verification.
 		boolean retFlag=false;
 		if(currentURL.getProtocol().equals("https"))
@@ -508,6 +521,7 @@ public class ContainerMain extends Activity {
 	}
 	
 	//The Chrome Client for uploading files.
+	@SuppressWarnings("unused")
 	private class MyWebChromeClient extends WebChromeClient {
 
 		FrameLayout.LayoutParams LayoutParameters = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
@@ -523,7 +537,7 @@ public class ContainerMain extends Activity {
 
            }
 
-           public void openFileChooser( ValueCallback uploadMsg, String acceptType ) {
+           public void openFileChooser( ValueCallback<Uri> uploadMsg, String acceptType ) {
            mUploadMessage = uploadMsg;
            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
            i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -546,7 +560,8 @@ public class ContainerMain extends Activity {
              callback.invoke(origin, true, false);
          }
          
-         @Override
+         @SuppressWarnings("NullableProblems")
+		 @Override
          public void onExceededDatabaseQuota(String url, String databaseIdentifier, long currentQuota, long estimatedSize,
              long totalUsedQuota, WebStorage.QuotaUpdater quotaUpdater) {
              quotaUpdater.updateQuota(estimatedSize * 2);
@@ -578,19 +593,18 @@ public class ContainerMain extends Activity {
              if (mCustomView == null) {
             	 mCustomViewContainer=null;
                  return;
-             } else {
-                 // Hide the custom view.  
-                 mCustomView.setVisibility(View.GONE);
-                 // Remove the custom view from its container.  
-                 mCustomViewContainer.removeView(mCustomView);
-                 mCustomView = null;
-                 mCustomViewContainer.setVisibility(View.GONE);
-                 mCustomViewCallback.onCustomViewHidden();
-                 // Show the content view.  
-                 mContentView.setVisibility(View.VISIBLE);
-                 setContentView(mContentView);
-                 mCustomViewContainer=null;
              }
+             // Hide the custom view.
+             mCustomView.setVisibility(View.GONE);
+             // Remove the custom view from its container.
+             mCustomViewContainer.removeView(mCustomView);
+             mCustomView = null;
+             mCustomViewContainer.setVisibility(View.GONE);
+             mCustomViewCallback.onCustomViewHidden();
+             // Show the content view.
+             mContentView.setVisibility(View.VISIBLE);
+             setContentView(mContentView);
+             mCustomViewContainer=null;
          }
     }
 
@@ -605,7 +619,6 @@ public class ContainerMain extends Activity {
     {
 
 		private X509TrustManager selfTrustManager = null;
-		List<X509Certificate> allIssuers = new ArrayList<X509Certificate>();
 		/**
 		 * Constructor for MyX509TrustManager. 
 		 * 
@@ -613,12 +626,7 @@ public class ContainerMain extends Activity {
 	    public MyX509TrustManager() throws NoSuchAlgorithmException, KeyStoreException {
 	        super();
 	        TrustManagerFactory selffactory = TrustManagerFactory.getInstance( TrustManagerFactory.getDefaultAlgorithm() );
-	        if(mykey==null)
-	        {	//System.out.println("MYKEY NULL");
-	        	selffactory.init((KeyStore)mykey); // Initialize TMF with self signed cert keystore
-	        }
-	        else
-	        	selffactory.init(mykey); 
+	        selffactory.init(mykey);
 	        TrustManager[] selftm = selffactory.getTrustManagers();
 	       
 	        if ( selftm.length == 0 )
@@ -670,7 +678,7 @@ public class ContainerMain extends Activity {
     implements X509TrustManager
     {
 		private X509TrustManager selfTrustManager = null;
-		List<X509Certificate> allIssuers = new ArrayList<X509Certificate>();
+
 		/**
 		 * Constructor for EasyX509TrustManager. This Trust manager deals with both Self Signed and 
 		 * default code. 
